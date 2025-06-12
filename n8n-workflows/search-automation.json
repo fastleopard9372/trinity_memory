@@ -1,0 +1,75 @@
+
+{
+    "name": "Trinity Search Automation",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "trinity-search",
+          "options": {}
+        },
+        "name": "Search Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1,
+        "position": [250, 300]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.TRINITY_API_URL }}/api/search",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "queryParametersUi": {
+            "parameter": [
+              {
+                "name": "q",
+                "value": "={{ $json.query }}"
+              },
+              {
+                "name": "limit",
+                "value": "={{ $json.limit || 10 }}"
+              },
+              {
+                "name": "fileTypes",
+                "value": "={{ $json.fileTypes }}"
+              }
+            ]
+          }
+        },
+        "name": "Search Trinity",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 2,
+        "position": [450, 300]
+      },
+      {
+        "parameters": {
+          "mode": "combine",
+          "combinationMode": "multiplex",
+          "options": {}
+        },
+        "name": "Merge Results",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 2,
+        "position": [850, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Process search results\nconst results = $input.all();\n\n// Format results for output\nconst formatted = results.map(item => {\n  const result = item.json;\n  return {\n    title: result.fileName,\n    content: result.content.substring(0, 200) + '...',\n    path: result.path,\n    type: result.fileType,\n    score: result.score,\n    tags: result.tags,\n    createdAt: result.createdAt\n  };\n});\n\nreturn formatted;"
+        },
+        "name": "Format Results",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 1,
+        "position": [650, 300]
+      }
+    ],
+    "connections": {
+      "Search Webhook": {
+        "main": [[{ "node": "Search Trinity", "type": "main", "index": 0 }]]
+      },
+      "Search Trinity": {
+        "main": [[{ "node": "Format Results", "type": "main", "index": 0 }]]
+      },
+      "Format Results": {
+        "main": [[{ "node": "Merge Results", "type": "main", "index": 0 }]]
+      }
+    }
+  }

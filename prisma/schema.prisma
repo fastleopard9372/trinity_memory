@@ -1,0 +1,222 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User profile extending Supabase auth
+model Profile {
+  id            String    @id @default(uuid())
+  userId        String    @unique // References Supabase auth.users
+  username      String?   @unique
+  email         String
+  settings      Json      @default("{}")
+  memoryQuotaMb Int       @default(1000)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  conversations Conversation[]
+  nasFiles      NasFile[]
+  searchQueries SearchQuery[]
+  memoryRules   MemoryRule[]
+  agentJobs     AgentJob[]
+  fileAccess    FileAccessLog[]
+}
+
+// NAS File Registry - Core table storing file paths
+model NasFile {
+  id             String    @id @default(uuid())
+  userId         String
+  profile        Profile   @relation(fields: [userId], references: [userId])
+  
+  // File location - this is the key data
+  filePath       String    // Full NAS path: /trinity/users/{userId}/...
+  fileName       String
+  folderPath     String
+  
+  // File metadata
+  fileType       String?   // 'conversation', 'summary', 'proposal'
+  fileSize       BigInt?
+  mimeType       String?
+  checksum       String?   // SHA-256 hash
+  
+  // Timestamps
+  createdAt      DateTime  @default(now())
+  modifiedAt     DateTime  @default(now())
+  lastAccessed   DateTime?
+  indexedAt      DateTime?
+  
+  // Search metadata (no content, just metadata)
+  title          String?
+  summary        String?   // Brief AI-generated summary
+  tags           String[]
+  metadata       Json?
+  
+  // References
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  vectorIds      String[]     // Pinecone vector IDs
+  
+  // Relations
+  accessLogs     FileAccessLog[]
+  
+  @@unique([userId, filePath])
+  @@index([userId])
+  @@index([filePath])
+  @@index([fileType])
+  @@index([conversationId])
+}
+
+// Conversations metadata
+model Conversation {
+  id            String    @id @default(uuid())
+  userId        String
+  profile       Profile   @relation(fields: [userId], references: [userId])
+  sessionId     String?
+  
+  // Metadata
+  messageCount  Int       @default(0)
+  totalTokens   Int       @default(0)
+  status        String    @default("active")
+  summary       String?
+  metadata      Json      @default("{}")
+  
+  // Timestamps
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  messages      Message[]
+  nasFiles      NasFile[]
+  tags          ConversationTag[]
+  triggers      MemoryTrigger[]
+  proposals     Proposal[]
+}
+
+// Messages metadata (actual content in NAS)
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  role           String       // 'user' or 'assistant'
+  // Note: actual content is stored in NAS file
+  tokenCount     Int?
+  vectorId       String?      // Pinecone reference
+  metadata       Json?
+  
+  timestamp      DateTime     @default(now())
+  
+  @@index([conversationId])
+  @@index([timestamp])
+}
+
+// Tags system
+model Tag {
+  id            Int      @id @default(autoincrement())
+  name          String
+  userId        String
+  category      String?
+  color         String?  // hex color
+  createdAt     DateTime @default(now())
+  
+  conversations ConversationTag[]
+  
+  @@unique([name, userId])
+}
+
+// Many-to-many conversation tags
+model ConversationTag {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tagId          Int
+  tag            Tag          @relation(fields: [tagId], references: [id])
+  
+  @@id([conversationId, tagId])
+}
+
+// Memory triggers/rules
+model MemoryRule {
+  id         String   @id @default(uuid())
+  userId     String
+  profile    Profile  @relation(fields: [userId], references: [userId])
+  ruleType   String   // 'keyword', 'length', 'time'
+  conditions Json
+  actions    Json
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Memory trigger log
+model MemoryTrigger {
+  id             String       @id @default(uuid())
+  triggerType    String       // 'length', 'keyword', 'manual', 'scheduled'
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  details        Json?
+  triggeredAt    DateTime     @default(now())
+}
+
+// Search queries log
+model SearchQuery {
+  id             String   @id @default(uuid())
+  userId         String
+  profile        Profile  @relation(fields: [userId], references: [userId])
+  queryText      String
+  queryType      String   // 'semantic', 'structured', 'hybrid'
+  filePaths      String[] // Results returned
+  executionTimeMs Int?
+  createdAt      DateTime @default(now())
+}
+
+// File access log
+model FileAccessLog {
+  id         String   @id @default(uuid())
+  userId     String
+  profile    Profile  @relation(fields: [userId], references: [userId])
+  fileId     String
+  file       NasFile  @relation(fields: [fileId], references: [id])
+  accessType String   // 'read', 'write', 'search'
+  accessedAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([fileId])
+}
+
+// Agent jobs
+model AgentJob {
+  id          String    @id @default(uuid())
+  userId      String
+  profile     Profile   @relation(fields: [userId], references: [userId])
+  source      String?
+  title       String
+  description String?
+  budgetMin   Decimal?  @db.Decimal(10, 2)
+  budgetMax   Decimal?  @db.Decimal(10, 2)
+  postedAt    DateTime?
+  scrapedAt   DateTime  @default(now())
+  metadata    Json?
+  
+  proposals   Proposal[]
+}
+
+// Proposals
+model Proposal {
+  id             String       @id @default(uuid())
+  jobId          String
+  job            AgentJob     @relation(fields: [jobId], references: [id])
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  content        String
+  generatedAt    DateTime     @default(now())
+  submittedAt    DateTime?
+  status         String?
+  metadata       Json?
+}

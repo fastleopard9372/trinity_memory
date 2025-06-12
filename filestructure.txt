@@ -1,0 +1,95 @@
+trinity-ai/
+├── src/
+│   ├── config/
+│   │   ├── database.config.ts
+│   │   ├── supabase.config.ts
+│   │   ├── pinecone.config.ts
+│   │   └── nas.config.ts
+│   │
+│   ├── prisma/
+│   │   ├── schema.prisma
+│   │   ├── migrations/
+│   │   └── seed.ts
+│   │
+│   ├── types/
+│   │   ├── memory.types.ts
+│   │   ├── nas.types.ts
+│   │   ├── query.types.ts
+│   │   └── index.ts
+│   │
+│   ├── middleware/
+│   │   ├── auth.middleware.ts
+│   │   ├── error.middleware.ts
+│   │   └── validation.middleware.ts
+│   │
+│   ├── services/
+│   │   ├── nas/
+│   │   │   ├── nas.service.ts
+│   │   │   ├── webdav.client.ts
+│   │   │   ├── smb.client.ts
+│   │   │   └── rclone.client.ts
+│   │   │
+│   │   ├── memory/
+│   │   │   ├── memory.service.ts
+│   │   │   ├── conversation.service.ts
+│   │   │   └── trigger.service.ts
+│   │   │
+│   │   ├── indexer/
+│   │   │   ├── file.indexer.ts
+│   │   │   ├── metadata.extractor.ts
+│   │   │   └── embedding.service.ts
+│   │   │
+│   │   ├── search/
+│   │   │   ├── search.service.ts
+│   │   │   ├── vector.search.ts
+│   │   │   ├── structured.search.ts
+│   │   │   └── hybrid.search.ts
+│   │   │
+│   │   ├── query/
+│   │   │   ├── query.parser.ts
+│   │   │   └── langchain.service.ts
+│   │   │
+│   │   └── agent/
+│   │       ├── proposal.agent.ts
+│   │       └── job.monitor.ts
+│   │
+│   ├── controllers/
+│   │   ├── auth.controller.ts
+│   │   ├── memory.controller.ts
+│   │   ├── search.controller.ts
+│   │   ├── file.controller.ts
+│   │   └── agent.controller.ts
+│   │
+│   ├── routes/
+│   │   ├── auth.routes.ts
+│   │   ├── memory.routes.ts
+│   │   ├── search.routes.ts
+│   │   ├── file.routes.ts
+│   │   └── index.ts
+│   │
+│   ├── utils/
+│   │   ├── logger.ts
+│   │   ├── validators.ts
+│   │   └── helpers.ts
+│   │
+│   ├── app.ts
+│   └── server.ts
+│
+├── n8n-workflows/
+│   ├── memory-sync.json
+│   ├── file-indexing.json
+│   ├── search-automation.json
+│   └── agent-workflows.json
+│
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── e2e/
+│
+├── .env.example
+├── .gitignore
+├── docker-compose.yml
+├── package.json
+├── tsconfig.json
+├── nodemon.json
+└── README.md

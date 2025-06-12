@@ -1,0 +1,98 @@
+{
+    "name": "Trinity File Indexing",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "triggerAtMinute": 15
+              }
+            ]
+          }
+        },
+        "name": "Schedule Trigger",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1,
+        "position": [250, 300]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.TRINITY_API_URL }}/api/files/list",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "queryParametersUi": {
+            "parameter": [
+              {
+                "name": "directory",
+                "value": "/trinity/users"
+              },
+              {
+                "name": "recursive",
+                "value": "true"
+              }
+            ]
+          }
+        },
+        "name": "List NAS Files",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 2,
+        "position": [450, 300]
+      },
+      {
+        "parameters": {
+          "fieldToSplitOut": "data",
+          "options": {}
+        },
+        "name": "Split Files",
+        "type": "n8n-nodes-base.itemLists",
+        "typeVersion": 1,
+        "position": [650, 300]
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.TRINITY_API_URL }}/api/files/reindex",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "requestMethod": "POST",
+          "bodyParametersUi": {
+            "parameter": [
+              {
+                "name": "path",
+                "value": "={{ $json.path }}"
+              }
+            ]
+          }
+        },
+        "name": "Reindex File",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 2,
+        "position": [850, 300]
+      },
+      {
+        "parameters": {
+          "batchSize": 5,
+          "options": {}
+        },
+        "name": "Batch",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 1,
+        "position": [750, 300]
+      }
+    ],
+    "connections": {
+      "Schedule Trigger": {
+        "main": [[{ "node": "List NAS Files", "type": "main", "index": 0 }]]
+      },
+      "List NAS Files": {
+        "main": [[{ "node": "Split Files", "type": "main", "index": 0 }]]
+      },
+      "Split Files": {
+        "main": [[{ "node": "Batch", "type": "main", "index": 0 }]]
+      },
+      "Batch": {
+        "main": [[{ "node": "Reindex File", "type": "main", "index": 0 }]]
+      }
+    }
+  }

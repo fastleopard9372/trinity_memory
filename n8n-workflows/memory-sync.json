@@ -1,0 +1,120 @@
+{
+    "name": "Trinity Memory Sync",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "trinity-memory-sync",
+          "options": {}
+        },
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1,
+        "position": [250, 300],
+        "webhookId": "trinity-memory-sync"
+      },
+      {
+        "parameters": {
+          "url": "={{ $env.TRINITY_API_URL }}/api/memory/conversations",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "httpHeaderAuth": {
+            "credential": "trinityApiAuth"
+          },
+          "options": {},
+          "bodyParametersUi": {
+            "parameter": [
+              {
+                "name": "messages",
+                "value": "={{ $json.messages }}"
+              },
+              {
+                "name": "metadata",
+                "value": "={{ $json.metadata }}"
+              }
+            ]
+          }
+        },
+        "name": "Save to Trinity",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 2,
+        "position": [450, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "boolean": [
+              {
+                "value1": "={{ $json.success }}",
+                "value2": true
+              }
+            ]
+          }
+        },
+        "name": "Check Success",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 1,
+        "position": [650, 300]
+      },
+      {
+        "parameters": {
+          "values": {
+            "string": [
+              {
+                "name": "status",
+                "value": "success"
+              },
+              {
+                "name": "conversationId",
+                "value": "={{ $json.data.conversationId }}"
+              },
+              {
+                "name": "filePath",
+                "value": "={{ $json.data.filePath }}"
+              }
+            ]
+          }
+        },
+        "name": "Success Response",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 1,
+        "position": [850, 200]
+      },
+      {
+        "parameters": {
+          "values": {
+            "string": [
+              {
+                "name": "status",
+                "value": "error"
+              },
+              {
+                "name": "error",
+                "value": "={{ $json.error }}"
+              }
+            ]
+          }
+        },
+        "name": "Error Response",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 1,
+        "position": [850, 400]
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [[{ "node": "Save to Trinity", "type": "main", "index": 0 }]]
+      },
+      "Save to Trinity": {
+        "main": [[{ "node": "Check Success", "type": "main", "index": 0 }]]
+      },
+      "Check Success": {
+        "main": [
+          [{ "node": "Success Response", "type": "main", "index": 0 }],
+          [{ "node": "Error Response", "type": "main", "index": 0 }]
+        ]
+      }
+    }
+  }
+  
+  
