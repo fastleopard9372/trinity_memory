@@ -18,6 +18,6 @@
     "incremental": true,
     "removeComments": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "src/services/pinecone.ts"],
   "exclude": ["node_modules", "dist", "tests"]
 }

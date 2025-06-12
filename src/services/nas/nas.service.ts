@@ -1,4 +1,5 @@
 import { createClient, FileStat, WebDAVClient } from 'webdav';
+import https from 'https';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
@@ -35,7 +36,8 @@ export class NASService {
     if (config.type === 'webdav') {
       this.webdav = createClient(config.baseUrl, {
         username: config.credentials.username,
-        password: config.credentials.password
+        password: config.credentials.password,
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
       });
     }
   }

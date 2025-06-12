@@ -1,19 +1,32 @@
 import { Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { MemoryService } from '../services/memory/memory.service';
-import { NASService } from '../services/nas/nas.service';
+import { SupabaseClient } from '@supabase/supabase-js';
+import { PineconeStore } from '@langchain/pinecone';
 import { Pinecone as PineconeClient } from '@pinecone-database/pinecone';
+import { MemoryService } from '../services/memory/memory.service';
+import { ConversationService } from '../services/memory/conversation.service';
+import { TriggerService } from '../services/memory/trigger.service';
+import { NASService } from '../services/nas/nas.service';
 
 export class MemoryController {
   private memoryService: MemoryService;
+  private conversationService: ConversationService;
+  private triggerService: TriggerService;
+  private prisma: PrismaClient;
+  private nas: NASService;
 
   constructor(
     prisma: PrismaClient,
-    supabase: any,
+    supabase: SupabaseClient,
     nas: NASService,
-    pinecone: PineconeClient
+    pinecone: PineconeClient,
+    vectorStore: PineconeStore
   ) {
-    this.memoryService = new MemoryService(prisma, supabase, pinecone, nas);
+    this.prisma = prisma;
+    this.nas = nas;
+    this.memoryService = new MemoryService(prisma, supabase, nas, pinecone, vectorStore);
+    this.conversationService = new ConversationService(prisma);
+    this.triggerService = new TriggerService(prisma);
   }
 
   /**

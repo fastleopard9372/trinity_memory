@@ -281,7 +281,7 @@ export class TriggerService {
       {
         userId,
         ruleType: 'length',
-        conditions: { minMessages: 20 },
+        conditions: { minMessages: 10 },
         actions: { 
           generateSummary: true,
           summaryStyle: 'detailed',

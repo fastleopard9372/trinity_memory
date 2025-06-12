@@ -1,11 +1,12 @@
 import { PrismaClient } from '@prisma/client';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Document } from "@langchain/core/documents";
 import { Pinecone as PineconeClient } from '@pinecone-database/pinecone';
 import { PineconeStore } from '@langchain/pinecone';
-import { OpenAIEmbeddings } from '@langchain/openai';
 import { NASService } from '../nas/nas.service';
 import { FileIndexer } from '../indexer/file.indexer';
 import { logger } from '../../utils/logger';
+import { timeStamp } from 'console';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -22,43 +23,26 @@ export interface SaveConversationResult {
 
 export class MemoryService {
   private prisma: PrismaClient;
-  private supabase: ReturnType<typeof createClient>;
+  private supabase: SupabaseClient;
   private pinecone: PineconeClient;
   private nas: NASService;
   private indexer: FileIndexer;
-  private vectorStore!: PineconeStore;
+  private vectorStore: PineconeStore;
 
   constructor(
     prisma: PrismaClient,
-    supabase: ReturnType<typeof createClient>,
+    supabase: SupabaseClient,
+    nas: NASService,
     pinecone: PineconeClient,
-    nas: NASService
+    vectorStore: PineconeStore
   ) {
     this.prisma = prisma;
     this.supabase = supabase;
     this.pinecone = pinecone;
+    this.vectorStore = vectorStore;
     this.nas = nas;
     this.indexer = new FileIndexer(prisma, nas, pinecone);
   }
-
-  async initialize() {
-    // Initialize Pinecone
-    this.pinecone = new PineconeClient({
-      apiKey: process.env.PINECONE_API_KEY!,
-      environment: process.env.PINECONE_ENV!,
-    });
-    
-
-    const pineconeIndex = this.pinecone.Index('trinity-memory');
-    
-    this.vectorStore = await PineconeStore.fromExistingIndex(
-      new OpenAIEmbeddings({
-        openAIApiKey: process.env.OPENAI_API_KEY,
-      }),
-      { pineconeIndex }
-    );
-  }
-
   /**
    * Save conversation to NAS and index file paths
    */
@@ -74,7 +58,38 @@ export class MemoryService {
         id: (Math.random() * 9999).toString(),
         totalTokens: "jk-porj-sdfwioefhnwoefwe0hojsldfsho09"
       }
-      // 1. Create conversation record in database
+
+      // 0. Save data in pinecone
+      const docs = messages.map((doc) => new Document({
+        pageContent: doc.content,
+        metadata: {role: doc.role, timeStamp:doc.timestamp}
+      }))
+      
+
+      // 1. Upsert to Pinecone
+
+      async function checkPineconeConnection(pinecone:any) {
+        try {
+          const indexes = await pinecone.listIndexes();
+          console.log("✅ Available Indexes:", indexes);
+      
+          if (indexes.includes(process.env.PINECONE_INDEX_NAME!)) {
+            console.log("🎉 Pinecone is connected and index is ready.");
+          } else {
+            console.log("⚠️ Index not found. Check PINECONE_INDEX_NAME.");
+          }
+        } catch (error) {
+          console.error("❌ Error connecting to Pinecone:", error);
+        }
+      }
+      
+      await checkPineconeConnection(this.pinecone);
+
+      // // const vectorId = await this.vectorStore.addDocuments(docs);
+      // const indexes = await this.pinecone.listIndexes();
+      // console.log("============", indexes);
+      
+      // 2. Create conversation record in database
       // const conversation = await this.prisma.conversation.create({
       //   data: {
       //     userId,
@@ -86,18 +101,18 @@ export class MemoryService {
       // });
       
 
-      // 2. Save messages metadata to database
+      // 3. Save messages metadata to database
       // const messageRecords = await this.prisma.message.createMany({
       //   data: messages.map((msg, index) => ({
       //     conversationId: conversation.id,
       //     role: msg.role,
       //     tokenCount: this.estimateTokens([msg]),
       //     timestamp: msg.timestamp || new Date(),
-      //     vectorId: `vec_${conversation.id}_${index}`,
+      //     vectorId: vectorId,
       //   })),
       // });
 
-      // 3. Prepare conversation file content
+      // 4. Prepare conversation file content
       const fileContent = {
         id: conversation.id,
         userId,
@@ -110,16 +125,16 @@ export class MemoryService {
         },
       };
 
-      // 4. Build file path and save to NAS
+      // 5. Build file path and save to NAS
       const filename = `conv_${conversation.id}.json`;
       const filePath = NASService.buildUserPath(userId, 'conversations', filename);
       
       await this.nas.writeFile(filePath, JSON.stringify(fileContent, null, 2));
 
-      // 5. Index the file (stores path in PostgreSQL and Pinecone)
+      // 6. Index the file (stores path in PostgreSQL and Pinecone)
       await this.indexer.indexFile(filePath, userId, conversation.id);
 
-      // 6. Check for memory triggers
+      // 7. Check for memory triggers
       await this.checkMemoryTriggers(conversation.id, messages, userId);
 
       logger.info(`Successfully saved conversation ${conversation.id} to ${filePath}`);

@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { PineconeStore } from '@langchain/pinecone';
 import { NASService } from '../nas/nas.service';
-import { QueryParser } from '../query/query.parser';
+import { QueryParser } from '../pinecone/query.parser';
 import { logger } from '../../utils/logger';
 
 export interface SearchResult {

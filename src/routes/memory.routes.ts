@@ -7,8 +7,8 @@ const router = Router();
 
 // Initialize controller with dependencies from app.locals
 router.use((req, res, next) => {
-  const { prisma, supabase, nas, pinecone } = req.app.locals;
-  req.memoryController = new MemoryController(prisma, supabase, nas, pinecone);
+  const { prisma, supabase, nas, pinecone, vectorStore } = req.app.locals;
+  req.memoryController = new MemoryController(prisma, supabase, nas, pinecone, vectorStore);
   next();
 });
 
