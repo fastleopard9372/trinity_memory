@@ -1,9 +1,10 @@
+import { Document } from 'langchain/document';
 import { PrismaClient } from '@prisma/client';
 import { PineconeStore } from '@langchain/pinecone';
 import { NASService } from '../nas/nas.service';
 import { QueryParser } from '../pinecone/query.parser';
+import { LangChainService } from '../pinecone/langchain.service';
 import { logger } from '../../utils/logger';
-import { log } from 'console';
 
 export interface SearchResult {
   id: string;
@@ -13,9 +14,10 @@ export interface SearchResult {
   content: string;
   metadata: any;
   tags: string[];
-  summary?: string;
+  summary: string;
   createdAt: Date;
   score: number;
+  relevantSection?: string; // Most relevant part of the content
 }
 
 export interface SearchOptions {
@@ -34,6 +36,7 @@ export class SearchService {
   private vectorStore: PineconeStore;
   private nas: NASService;
   private queryParser: QueryParser;
+  private langchain: LangChainService;
 
   constructor(
     prisma: PrismaClient,
@@ -44,56 +47,63 @@ export class SearchService {
     this.vectorStore = vectorStore;
     this.nas = nas;
     this.queryParser = new QueryParser();
+    this.langchain = new LangChainService();
   }
 
   /**
-   * Main search function - routes to appropriate search method
+   * Initialize LangChain service
+   */
+  async initialize(pineconeClient: any) {
+    await this.langchain.initializePineconeStore(
+      pineconeClient, 
+      process.env.PINECONE_INDEX || 'trinity-memory'
+    );
+  }
+
+  /**
+   * Main search function with LangChain enhancement
    */
   async search(
     query: string,
     userId: string,
     options?: SearchOptions
-  ): Promise<(SearchResult|null|any)[]> {
+  ): Promise<SearchResult[]> {
     logger.info(`Searching for: "${query}" for user ${userId}`);
 
     // Parse query intent
     const intent = await this.queryParser.parseQuery(query);
-    logger.info("intent:",intent);
-    let searchResult: any[];
+
+    let results: SearchResult[];
 
     switch (intent.type) {
       case 'semantic':
-        searchResult = await this.semanticSearch(query, userId, options);
+        results = await this.semanticSearchWithLangChain(query, userId, options);
         break;
       case 'structured':
-        searchResult = await this.structuredSearch(intent.filters, userId, options);
+        results = await this.structuredSearch(intent.filters, userId, options);
         break;
       case 'hybrid':
-        searchResult = await this.hybridSearch(query, intent.filters, userId, options);
+        results = await this.hybridSearchWithLangChain(query, intent.filters, userId, options);
         break;
       default:
-        searchResult = await this.semanticSearch(query, userId, options);
+        throw new Error(`Unknown search type: ${intent.type}`);
     }
 
-    const results = searchResult;
-    // Retrieve file contents from NAS
-    // const results = await this.retrieveFileContents(filePaths, userId);
-
     // Log search query for analytics
-    // await this.logSearchQuery(query, intent.type, filePaths, userId);
+    await this.logSearchQuery(query, intent.type, results.map(r => r.path), userId);
 
     return results;
   }
 
   /**
-   * Semantic search using Pinecone
+   * Semantic search using LangChain
    */
-  private async semanticSearch(
+  private async semanticSearchWithLangChain(
     query: string,
     userId: string,
     options?: SearchOptions
-  ): Promise<any[]> {
-    logger.info(`Performing semantic search for: "${query}"`);
+  ): Promise<SearchResult[]> {
+    logger.info(`Performing semantic search with LangChain for: "${query}"`);
 
     // Build metadata filter
     const filter: any = { userId };
@@ -101,33 +111,247 @@ export class SearchService {
       filter.fileType = { $in: options.fileTypes };
     }
 
-    // Search in Pinecone
-    const vectorResults = await this.vectorStore.similaritySearchWithScore(
+    // Use LangChain for similarity search with scores
+    const searchResults = await this.langchain.similaritySearchWithScore(
       query,
       options?.limit || 10,
       filter
     );
 
-    // Extract unique file texts with scores
-    const textScores = new Map<string, number>();
-    vectorResults.forEach(([doc, score]) => {
-      const text = doc.pageContent;
-      const currentScore = textScores.get(text) || 0;
-      textScores.set(text, Math.max(currentScore, score));
+    // Group results by file path
+    const filePathMap = new Map<string, { doc: Document; score: number }[]>();
+    
+    searchResults.forEach(([doc, score]) => {
+      const filePath = doc.metadata.filePath;
+      if (!filePathMap.has(filePath)) {
+        filePathMap.set(filePath, []);
+      }
+      filePathMap.get(filePath)!.push({ doc, score });
     });
-    // Sort by score and return texts
-    return Array.from(textScores.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, options?.limit || 10)
+
+    // Get file contents and build results
+    const results: SearchResult[] = [];
+    
+    for (const [filePath, docs] of filePathMap.entries()) {
+      try {
+        // Get file metadata from database
+        const fileRecord = await this.prisma.nasFile.findFirst({
+          where: { filePath, userId },
+        });
+
+        if (!fileRecord) continue;
+
+        // Read content from NAS
+        const content = await this.nas.readFile(filePath);
+
+        // Find the most relevant section
+        const bestMatch = docs.reduce((best, current) => 
+          current.score > best.score ? current : best
+        );
+
+        // Extract relevant section from content
+        const relevantSection = this.extractRelevantSection(
+          content,
+          bestMatch.doc.pageContent
+        );
+
+        results.push({
+          id: fileRecord.id,
+          path: fileRecord.filePath,
+          fileName: fileRecord.fileName,
+          fileType: fileRecord.fileType || 'unknown',
+          content,
+          metadata: {
+            ...((fileRecord.metadata ?? {}) as Record<string, any>),
+            matchedChunks: docs.length,
+            bestScore: bestMatch.score,
+          },
+          tags: fileRecord.tags,
+          summary: fileRecord.summary ?? '',
+          createdAt: fileRecord.createdAt,
+          score: bestMatch.score,
+          relevantSection,
+        });
+
+        // Log file access
+        await this.logFileAccess(fileRecord.id, userId, 'search');
+      } catch (error) {
+        logger.error(`Failed to process file ${filePath}:`, error);
+      }
+    }
+
+    // Sort by score
+    return results.sort((a, b) => b.score - a.score).slice(0, options?.limit || 10);
   }
+
   /**
-   * Structured search using PostgreSQL
+   * Hybrid search using LangChain
+   */
+  private async hybridSearchWithLangChain(
+    query: string,
+    filters: any,
+    userId: string,
+    options?: SearchOptions
+  ): Promise<SearchResult[]> {
+    logger.info('Performing hybrid search with LangChain');
+
+    // Run both searches in parallel
+    const [semanticResults, structuredResults] = await Promise.all([
+      this.semanticSearchWithLangChain(query, userId, options),
+      this.structuredSearch(filters, userId, options),
+    ]);
+
+    // Merge and score results
+    const resultMap = new Map<string, SearchResult>();
+
+    // Add semantic results with boosted scores
+    semanticResults.forEach(result => {
+      resultMap.set(result.path, {
+        ...result,
+        score: result.score * 1.5, // Boost semantic matches
+      });
+    });
+
+    // Add structured results
+    structuredResults.forEach(result => {
+      if (resultMap.has(result.path)) {
+        // Boost items that match both searches
+        const existing = resultMap.get(result.path)!;
+        existing.score += 0.5;
+      } else {
+        resultMap.set(result.path, {
+          ...result,
+          score: 0.5,
+        });
+      }
+    });
+
+    // Return sorted results
+    return Array.from(resultMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, options?.limit || 10);
+  }
+
+  /**
+   * Conversational search using LangChain
+   */
+  async conversationalSearch(
+    query: string,
+    userId: string,
+    conversationHistory?: string[]
+  ): Promise<{
+    answer: string;
+    sources: SearchResult[];
+  }> {
+    logger.info('Performing conversational search');
+
+    // Create conversational chain
+    const { retriever, qaPrompt, llm } = await this.langchain.createConversationalChain(userId);
+
+    // Get relevant documents
+    const relevantDocs = await retriever.getRelevantDocuments(query);
+
+    // Build context from documents
+    const context = relevantDocs
+      .map(doc => doc.pageContent)
+      .join('\n\n');
+
+    // Generate answer
+    const prompt = await qaPrompt.format({
+      context,
+      question: query,
+    });
+
+    const answer = await llm.predict(prompt);
+
+    // Get source files
+    const sourcePaths = [...new Set(relevantDocs.map(doc => doc.metadata.filePath))];
+    const sources = await this.retrieveFileContents(sourcePaths, userId);
+
+    return {
+      answer,
+      sources: sources.slice(0, 5), // Top 5 sources
+    };
+  }
+
+  /**
+   * Find similar conversations using LangChain
+   */
+  async findSimilarContent(
+    referenceText: string,
+    userId: string,
+    limit: number = 5
+  ): Promise<SearchResult[]> {
+    logger.info('Finding similar content using LangChain');
+
+    // Generate embedding for reference text
+    const embedding = await this.langchain.generateQueryEmbedding(referenceText);
+
+    // Search by embedding (this would require direct Pinecone access)
+    // For now, use similarity search
+    const results = await this.langchain.similaritySearchWithScore(
+      referenceText,
+      limit * 2, // Get more results to filter
+      { userId }
+    );
+
+    // Filter out the reference itself if it exists
+    const filtered = results.filter(([doc, score]) => 
+      score < 0.99 // Exclude exact matches
+    );
+
+    // Get file contents
+    const filePaths = [...new Set(filtered.map(([doc]) => doc.metadata.filePath))];
+    const fileContents = await this.retrieveFileContents(filePaths.slice(0, limit), userId);
+
+    return fileContents;
+  }
+
+  /**
+   * Extract relevant section from content
+   */
+  private extractRelevantSection(
+    fullContent: string,
+    matchedChunk: string,
+    contextLength: number = 500
+  ): string {
+    try {
+      // For JSON content (conversations)
+      const parsed = JSON.parse(fullContent);
+      if (parsed.messages) {
+        // Find the message that best matches the chunk
+        const messages = parsed.messages as any[];
+        for (const msg of messages) {
+          if (msg.content.includes(matchedChunk.substring(0, 50))) {
+            return msg.content;
+          }
+        }
+      }
+    } catch {
+      // Not JSON, treat as plain text
+      const index = fullContent.toLowerCase().indexOf(
+        matchedChunk.substring(0, 50).toLowerCase()
+      );
+      
+      if (index !== -1) {
+        const start = Math.max(0, index - contextLength / 2);
+        const end = Math.min(fullContent.length, index + contextLength / 2);
+        return '...' + fullContent.substring(start, end) + '...';
+      }
+    }
+
+    // Fallback to chunk itself
+    return matchedChunk;
+  }
+
+  /**
+   * Structured search
    */
   private async structuredSearch(
     filters: any,
     userId: string,
     options?: SearchOptions
-  ): Promise<any[]> {
+  ): Promise<SearchResult[]> {
     logger.info('Performing structured search with filters:', filters);
 
     const whereClause: any = { userId };
@@ -158,53 +382,15 @@ export class SearchService {
     }
 
     // Query database
-    const searchResult = await this.prisma.nasFile.findMany({
+    const files = await this.prisma.nasFile.findMany({
       where: whereClause,
       take: options?.limit || 10,
       skip: options?.offset || 0,
       orderBy: { createdAt: 'desc' },
     });
 
-    return searchResult;
-  }
-
-  /**
-   * Hybrid search combining semantic and structured
-   */
-  private async hybridSearch(
-    query: string,
-    filters: any,
-    userId: string,
-    options?: SearchOptions
-  ): Promise<any[]> {
-    logger.info('Performing hybrid search');
-
-    // Run both searches in parallel
-    const [semanticPaths, structuredPaths] = await Promise.all([
-      this.semanticSearch(query, userId, options),
-      this.structuredSearch(filters, userId, options),
-    ]);
-
-    // Merge results with scoring
-    const pathScores = new Map<string, number>();
-
-    // Add semantic results with higher weight
-    semanticPaths.forEach((path, index) => {
-      const score = (semanticPaths.length - index) / semanticPaths.length * 1.5;
-      pathScores.set(path, score);
-    });
-
-    // Add structured results
-    structuredPaths.forEach((path, index) => {
-      const score = (structuredPaths.length - index) / structuredPaths.length * 0.5;
-      const currentScore = pathScores.get(path) || 0;
-      pathScores.set(path, currentScore + score);
-    });
-
-    // Sort by combined score
-    return Array.from(pathScores.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, options?.limit || 10)
+    // Retrieve contents
+    return this.retrieveFileContents(files.map(f => f.filePath), userId);
   }
 
   /**
@@ -213,7 +399,7 @@ export class SearchService {
   private async retrieveFileContents(
     filePaths: string[],
     userId: string
-  ): Promise<(SearchResult|null)[]> {
+  ): Promise<SearchResult[]> {
     // Get file metadata from database
     const fileRecords = await this.prisma.nasFile.findMany({
       where: {
@@ -251,7 +437,7 @@ export class SearchService {
             tags: fileRecord.tags,
             summary: fileRecord.summary || undefined,
             createdAt: fileRecord.createdAt,
-            score: 1.0, // Will be updated based on search relevance
+            score: 1.0,
           };
         } catch (error) {
           logger.error(`Failed to read file ${filePath}:`, error);
@@ -260,9 +446,12 @@ export class SearchService {
       })
     );
 
+    // Filter out failed retrievals and null results
     return results
-    .filter(r => r.status === 'fulfilled')
-    .map(r => r.status === 'fulfilled' ? r.value : null);
+      .filter((r): r is PromiseFulfilledResult<SearchResult | null> => 
+        r.status === 'fulfilled' && r.value !== null
+      )
+      .map(r => r.value!);
   }
 
   /**
@@ -314,41 +503,5 @@ export class SearchService {
     } catch (error) {
       logger.error('Failed to log file access:', error);
     }
-  }
-
-  /**
-   * Get file by direct path
-   */
-  async getFileByPath(filePath: string, userId: string): Promise<SearchResult> {
-    // Check permissions
-    const fileRecord = await this.prisma.nasFile.findFirst({
-      where: {
-        filePath,
-        userId,
-      },
-    });
-
-    if (!fileRecord) {
-      throw new Error('File not found or access denied');
-    }
-
-    // Read content from NAS
-    const content = await this.nas.readFile(filePath);
-
-    // Log access
-    await this.logFileAccess(fileRecord.id, userId, 'direct');
-
-    return {
-      id: fileRecord.id,
-      path: fileRecord.filePath,
-      fileName: fileRecord.fileName,
-      fileType: fileRecord.fileType || 'unknown',
-      content,
-      metadata: fileRecord.metadata || {},
-      tags: fileRecord.tags,
-      summary: fileRecord.summary || undefined,
-      createdAt: fileRecord.createdAt,
-      score: 1.0,
-    };
   }
 }

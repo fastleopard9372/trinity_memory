@@ -5,6 +5,7 @@ import { Pinecone as PineconeClient } from '@pinecone-database/pinecone';
 import { PineconeStore } from '@langchain/pinecone';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { NASService } from '../nas/nas.service';
+import { LangChainService } from '../pinecone/langchain.service';
 import { FileIndexer } from '../indexer/file.indexer';
 import { QueryParser, QueryIntent } from '../pinecone/query.parser';
 import { logger } from '../../utils/logger';
@@ -25,11 +26,12 @@ export interface SaveConversationResult {
 
 export class MemoryService {
   private prisma: PrismaClient;
-  private supabase: SupabaseClient;
+  private supabase: any;
   private pinecone: PineconeClient;
   private nas: NASService;
   private indexer: FileIndexer;
   private vectorStore: PineconeStore;
+  private langchain: LangChainService;
 
   constructor(
     prisma: PrismaClient,
@@ -44,100 +46,148 @@ export class MemoryService {
     this.vectorStore = vectorStore;
     this.nas = nas;
     this.indexer = new FileIndexer(prisma, nas, pinecone);
+    this.langchain = new LangChainService();
   }
+  async initialize() {
+    // Initialize LangChain with Pinecone
+    await this.langchain.initializePineconeStore(this.pinecone, 'trinity-memory');
+  }
+
   /**
-   * Save conversation to NAS and index file paths
+   * Save conversation to NAS and index file paths with LangChain
    */
   async saveConversation(
-    message: Message,
+    messages: Message[],
     userId: string,
     metadata?: Record<string, any>
   ): Promise<SaveConversationResult> {
-    logger.info(`Saving conversation for user ${userId} with message`);
+    logger.info(`Saving conversation for user ${userId} with ${messages.length} messages`);
+
     try {
-      const conversation = {
-        id: (Math.random() * 9999).toString(),
-        totalTokens: "jk-porj-sdfwioefhnwoefwe0hojsldfsho09"
+      // 1. Analyze conversation with LangChain
+      const analysis = await this.langchain.analyzeConversation(messages);
+      
+      // 2. Create conversation record in database
+      const conversation = await this.prisma.conversation.create({
+        data: {
+          userId,
+          messageCount: messages.length,
+          totalTokens: this.estimateTokens(messages),
+          status: 'active',
+          summary: analysis.summary,
+          metadata: {
+            ...metadata,
+            analysis: {
+              topics: analysis.topics,
+              sentiment: analysis.sentiment,
+              keyPoints: analysis.keyPoints,
+              actionItems: analysis.actionItems,
+            },
+          },
+        },
+      });
+
+      // 3. Extract entities for better searchability
+      const conversationText = messages.map(m => m.content).join(' ');
+      const entities = await this.langchain.extractEntities(conversationText);
+      
+      // 4. Auto-tag based on topics and entities
+      const autoTags = [...analysis.topics, ...entities.topics].filter(
+        (tag, index, self) => self.indexOf(tag) === index
+      );
+      
+      if (autoTags.length > 0) {
+        await this.tagConversationWithTopics(conversation.id, autoTags, userId);
       }
 
-      const textSplitter = new RecursiveCharacterTextSplitter({
-        chunkSize: 1000,
-        chunkOverlap: 200,
+      // 5. Save messages metadata to database
+      const messageRecords = await this.prisma.message.createMany({
+        data: messages.map((msg, index) => ({
+          conversationId: conversation.id,
+          role: msg.role,
+          tokenCount: this.estimateTokens([msg]),
+          timestamp: msg.timestamp || new Date(),
+          vectorId: `vec_${conversation.id}_${index}`,
+        })),
       });
-      logger.info("saving in pinecone...");
-        const fullText = `[${message.role}] ${message.content}`;
-        const chunks = await textSplitter.splitText(fullText);
-        const documents = chunks.map((chunk, idx) => new Document({
-        pageContent: chunk,
-        metadata: {
-          conversationId:conversation.id,
-          userId,
-          type: 'conversation',
-          chunkIndex: idx,
-          totalChunks: chunks.length,
-          timestamp: new Date().toISOString(),
-          ...metadata
-        },
-      }));
-      await this.vectorStore.addDocuments(documents);
-      logger.info("saved in pinecone");
 
-      // 2. Create conversation record in database
-      // const conversation = await this.prisma.conversation.create({
-      //   data: {
-      //     userId,
-      //     messageCount: messages.length,
-      //     totalTokens: this.estimateTokens(messages),
-      //     status: 'active',
-      //     metadata: metadata || {},
-      //   },
-      // });
-      
-
-      // 3. Save messages metadata to database
-      // const messageRecords = await this.prisma.message.createMany({
-      //   data: messages.map((msg, index) => ({
-      //     conversationId: conversation.id,
-      //     role: msg.role,
-      //     tokenCount: this.estimateTokens([msg]),
-      //     timestamp: msg.timestamp || new Date(),
-      //     vectorId: vectorId,
-      //   })),
-      // });
-
-      // 4. Prepare conversation file content
+      // 6. Prepare conversation file content
       const fileContent = {
         id: conversation.id,
         userId,
         timestamp: new Date().toISOString(),
-        message: message,
+        messages: messages,
         metadata: {
           ...metadata,
-          messageCount: 1,
+          messageCount: messages.length,
           totalTokens: conversation.totalTokens,
+          analysis,
+          entities,
         },
       };
 
-      // 5. Build file path and save to NAS
-
-      // const filename = `conv_${conversation.id}.json`;
-      // const filePath = NASService.buildUserPath(userId, 'conversations', filename);
+      // 7. Build file path and save to NAS
+      const filename = `conv_${conversation.id}.json`;
+      const filePath = NASService.buildUserPath(userId, 'conversations', filename);
       
-      // await this.nas.writeFile(filePath, JSON.stringify(fileContent, null, 2));
+      await this.nas.writeFile(filePath, JSON.stringify(fileContent, null, 2));
 
-      // 6. Index the file (stores path in PostgreSQL)
-      // await this.indexer.indexFile(filePath, userId, conversation.id);
+      // 8. Create LangChain documents from messages
+      const documents = await this.createConversationDocuments(
+        messages,
+        conversation.id,
+        userId,
+        filePath
+      );
 
-      // 7. Check for memory triggers
-      // await this.checkMemoryTriggers(conversation.id, messages, userId);
+      // 9. Add documents to Pinecone via LangChain
+      await this.langchain.addDocumentsToPinecone(documents);
 
-      // logger.info(`Successfully saved conversation ${conversation.id} to ${filePath}`);
+      // 10. Store file path reference in database
+      await this.prisma.nasFile.create({
+        data: {
+          userId,
+          filePath,
+          fileName: filename,
+          folderPath: NASService.buildUserPath(userId, 'conversations', ''),
+          fileType: 'conversation',
+          fileSize: BigInt(JSON.stringify(fileContent).length),
+          checksum: await this.nas.getFileChecksum(filePath),
+          title: `Conversation on ${new Date().toLocaleDateString()}`,
+          summary: analysis.summary,
+          tags: autoTags,
+          metadata: JSON.parse(JSON.stringify({ analysis, entities })),
+          conversationId: conversation.id,
+          vectorIds: documents.map((_, i) => `vec_${conversation.id}_${i}`),
+          indexedAt: new Date(),
+        },
+      });
+
+      // 11. Generate follow-up questions for future reference
+      const followUpQuestions = await this.langchain.generateFollowUpQuestions(
+        conversationText,
+        3
+      );
+      
+      if (followUpQuestions.length > 0) {
+        await this.prisma.conversation.update({
+          where: { id: conversation.id },
+          data: {
+            metadata: {
+              ...conversation.metadata as any,
+              followUpQuestions,
+            },
+          },
+        });
+      }
+
+      logger.info(`Successfully saved conversation ${conversation.id} to ${filePath}`);
 
       return {
         conversationId: conversation.id,
-        filePath:"",
+        filePath,
         indexed: true,
-        messageCount: 1,
+        messageCount: messages.length,
       };
     } catch (error) {
       logger.error('Failed to save conversation:', error);
@@ -146,7 +196,7 @@ export class MemoryService {
   }
 
   /**
-   * Generate summary for conversation
+   * Generate summary for conversation using LangChain
    */
   async generateSummary(conversationId: string): Promise<string> {
     const conversation = await this.prisma.conversation.findUnique({
@@ -162,9 +212,11 @@ export class MemoryService {
     const content = await this.nas.readFile(conversation.nasFiles[0].filePath);
     const data = JSON.parse(content);
 
-    // Generate summary using OpenAI
-    // This is a placeholder - implement actual summary generation
-    const summary = `Conversation with ${data.messages.length} messages about various topics.`;
+    // Generate smart summary using LangChain
+    const summary = await this.langchain.generateSmartSummary(
+      conversationId,
+      data.messages
+    );
 
     // Update conversation with summary
     await this.prisma.conversation.update({
@@ -180,12 +232,91 @@ export class MemoryService {
     );
 
     await this.nas.writeFile(summaryPath, summary);
-    
 
     // Index summary file
     await this.indexer.indexFile(summaryPath, conversation.userId, conversationId);
 
     return summary;
+  }
+
+  /**
+   * Create LangChain documents from messages
+   */
+  private async createConversationDocuments(
+    messages: Message[],
+    conversationId: string,
+    userId: string,
+    filePath: string
+  ): Promise<Document[]> {
+    // Split messages into chunks if needed
+    const chunks: { text: string; messageIndices: number[] }[] = [];
+    let currentChunk = '';
+    let currentIndices: number[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      const messageText = `${messages[i].role}: ${messages[i].content}`;
+      
+      if (currentChunk.length + messageText.length > 1000) {
+        if (currentChunk) {
+          chunks.push({ text: currentChunk, messageIndices: currentIndices });
+        }
+        currentChunk = messageText;
+        currentIndices = [i];
+      } else {
+        currentChunk += '\n\n' + messageText;
+        currentIndices.push(i);
+      }
+    }
+
+    if (currentChunk) {
+      chunks.push({ text: currentChunk, messageIndices: currentIndices });
+    }
+
+    // Create documents with metadata
+    return chunks.map((chunk, index) => new Document({
+      pageContent: chunk.text,
+      metadata: {
+        conversationId,
+        userId,
+        filePath,
+        chunkIndex: index,
+        totalChunks: chunks.length,
+        messageIndices: chunk.messageIndices,
+        timestamp: new Date().toISOString(),
+        type: 'conversation',
+      },
+    }));
+  }
+
+  /**
+   * Tag conversation based on extracted topics
+   */
+  private async tagConversationWithTopics(
+    conversationId: string,
+    topics: string[],
+    userId: string
+  ): Promise<void> {
+    const tags = await Promise.all(
+      topics.slice(0, 5).map(async (topic) => { // Limit to 5 tags
+        return this.prisma.tag.upsert({
+          where: { name_userId: { name: topic.toLowerCase(), userId } },
+          update: {},
+          create: { 
+            name: topic.toLowerCase(), 
+            userId,
+            category: 'auto-generated',
+          },
+        });
+      })
+    );
+
+    await this.prisma.conversationTag.createMany({
+      data: tags.map(tag => ({
+        conversationId,
+        tagId: tag.id,
+      })),
+      skipDuplicates: true,
+    });
   }
 
   /**
@@ -230,7 +361,7 @@ export class MemoryService {
           data: {
             triggerType: rule.ruleType,
             conversationId,
-            details: rule.actions ? JSON.parse(JSON.stringify(rule.actions)) : undefined,
+            details: JSON.parse(JSON.stringify(rule.actions)),
           },
         });
 
