@@ -3,6 +3,7 @@ import { PineconeStore } from '@langchain/pinecone';
 import { NASService } from '../nas/nas.service';
 import { QueryParser } from '../pinecone/query.parser';
 import { logger } from '../../utils/logger';
+import { log } from 'console';
 
 export interface SearchResult {
   id: string;
@@ -52,33 +53,34 @@ export class SearchService {
     query: string,
     userId: string,
     options?: SearchOptions
-  ): Promise<(SearchResult|null)[]> {
+  ): Promise<(SearchResult|null|any)[]> {
     logger.info(`Searching for: "${query}" for user ${userId}`);
 
     // Parse query intent
     const intent = await this.queryParser.parseQuery(query);
-
-    let filePaths: string[];
+    logger.info("intent:",intent);
+    let searchResult: any[];
 
     switch (intent.type) {
       case 'semantic':
-        filePaths = await this.semanticSearch(query, userId, options);
+        searchResult = await this.semanticSearch(query, userId, options);
         break;
       case 'structured':
-        filePaths = await this.structuredSearch(intent.filters, userId, options);
+        searchResult = await this.structuredSearch(intent.filters, userId, options);
         break;
       case 'hybrid':
-        filePaths = await this.hybridSearch(query, intent.filters, userId, options);
+        searchResult = await this.hybridSearch(query, intent.filters, userId, options);
         break;
       default:
-        throw new Error(`Unknown search type: ${intent.type}`);
+        searchResult = await this.semanticSearch(query, userId, options);
     }
 
+    const results = searchResult;
     // Retrieve file contents from NAS
-    const results = await this.retrieveFileContents(filePaths, userId);
+    // const results = await this.retrieveFileContents(filePaths, userId);
 
     // Log search query for analytics
-    await this.logSearchQuery(query, intent.type, filePaths, userId);
+    // await this.logSearchQuery(query, intent.type, filePaths, userId);
 
     return results;
   }
@@ -90,7 +92,7 @@ export class SearchService {
     query: string,
     userId: string,
     options?: SearchOptions
-  ): Promise<string[]> {
+  ): Promise<any[]> {
     logger.info(`Performing semantic search for: "${query}"`);
 
     // Build metadata filter
@@ -100,28 +102,24 @@ export class SearchService {
     }
 
     // Search in Pinecone
-    const vectorResults = await this.vectorStore.similaritySearch(
+    const vectorResults = await this.vectorStore.similaritySearchWithScore(
       query,
-      options?.limit || 20,
+      options?.limit || 10,
       filter
     );
 
-    // Extract unique file paths with scores
-    const pathScores = new Map<string, number>();
-
-    vectorResults.forEach(result => {
-      const path = result.metadata.filePath;
-      const currentScore = pathScores.get(path) || 0;
-      pathScores.set(path, Math.max(currentScore, (result as any).score || 0));
+    // Extract unique file texts with scores
+    const textScores = new Map<string, number>();
+    vectorResults.forEach(([doc, score]) => {
+      const text = doc.pageContent;
+      const currentScore = textScores.get(text) || 0;
+      textScores.set(text, Math.max(currentScore, score));
     });
-
-    // Sort by score and return paths
-    return Array.from(pathScores.entries())
+    // Sort by score and return texts
+    return Array.from(textScores.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, options?.limit || 10)
-      .map(([path]) => path);
   }
-
   /**
    * Structured search using PostgreSQL
    */
@@ -129,7 +127,7 @@ export class SearchService {
     filters: any,
     userId: string,
     options?: SearchOptions
-  ): Promise<string[]> {
+  ): Promise<any[]> {
     logger.info('Performing structured search with filters:', filters);
 
     const whereClause: any = { userId };
@@ -160,15 +158,14 @@ export class SearchService {
     }
 
     // Query database
-    const files = await this.prisma.nasFile.findMany({
+    const searchResult = await this.prisma.nasFile.findMany({
       where: whereClause,
-      select: { filePath: true },
       take: options?.limit || 10,
       skip: options?.offset || 0,
       orderBy: { createdAt: 'desc' },
     });
 
-    return files.map(f => f.filePath);
+    return searchResult;
   }
 
   /**
@@ -179,7 +176,7 @@ export class SearchService {
     filters: any,
     userId: string,
     options?: SearchOptions
-  ): Promise<string[]> {
+  ): Promise<any[]> {
     logger.info('Performing hybrid search');
 
     // Run both searches in parallel
@@ -208,7 +205,6 @@ export class SearchService {
     return Array.from(pathScores.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, options?.limit || 10)
-      .map(([path]) => path);
   }
 
   /**

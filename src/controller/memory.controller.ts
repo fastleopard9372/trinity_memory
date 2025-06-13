@@ -1,12 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { PineconeStore } from '@langchain/pinecone';
 import { Pinecone as PineconeClient } from '@pinecone-database/pinecone';
+import { PineconeStore } from '@langchain/pinecone';
 import { MemoryService } from '../services/memory/memory.service';
+import { SearchService } from '../services/search/search.service';
 import { ConversationService } from '../services/memory/conversation.service';
 import { TriggerService } from '../services/memory/trigger.service';
 import { NASService } from '../services/nas/nas.service';
+import { log } from 'console';
+import { logger } from '../utils/logger';
 
 export class MemoryController {
   private memoryService: MemoryService;
@@ -14,6 +17,7 @@ export class MemoryController {
   private triggerService: TriggerService;
   private prisma: PrismaClient;
   private nas: NASService;
+  private searchService: SearchService;
 
   constructor(
     prisma: PrismaClient,
@@ -27,6 +31,7 @@ export class MemoryController {
     this.memoryService = new MemoryService(prisma, supabase, nas, pinecone, vectorStore);
     this.conversationService = new ConversationService(prisma);
     this.triggerService = new TriggerService(prisma);
+    this.searchService = new SearchService(prisma, vectorStore, nas);
   }
 
   /**
@@ -34,21 +39,24 @@ export class MemoryController {
    */
   saveConversation = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { messages, metadata } = req.body;
+      const { message, metadata } = req.body;
       const userId = req.user.id; // From auth middleware
 
-      if (!messages || !Array.isArray(messages)) {
+      if (!message) {
         return res.status(400).json({
-          error: 'Messages array is required',
+          error: 'Message is required',
         });
       }
 
       const result = await this.memoryService.saveConversation(
-        messages,
+        message,
         userId,
         metadata
-        );
-        
+      );
+      
+      const fullText = `[${message.role}] ${message.content}`;
+      const searchResult = await this.searchService.search(fullText, userId)
+      logger.info(searchResult);
       res.json({
         success: true,
         data: { result },

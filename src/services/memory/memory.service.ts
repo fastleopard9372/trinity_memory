@@ -3,10 +3,12 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Document } from "@langchain/core/documents";
 import { Pinecone as PineconeClient } from '@pinecone-database/pinecone';
 import { PineconeStore } from '@langchain/pinecone';
+import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { NASService } from '../nas/nas.service';
 import { FileIndexer } from '../indexer/file.indexer';
+import { QueryParser, QueryIntent } from '../pinecone/query.parser';
 import { logger } from '../../utils/logger';
-import { timeStamp } from 'console';
+import { log, timeStamp } from 'console';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -47,48 +49,39 @@ export class MemoryService {
    * Save conversation to NAS and index file paths
    */
   async saveConversation(
-    messages: Message[],
+    message: Message,
     userId: string,
     metadata?: Record<string, any>
   ): Promise<SaveConversationResult> {
-    logger.info(`Saving conversation for user ${userId} with ${messages.length} messages`);
-
+    logger.info(`Saving conversation for user ${userId} with message`);
     try {
       const conversation = {
         id: (Math.random() * 9999).toString(),
         totalTokens: "jk-porj-sdfwioefhnwoefwe0hojsldfsho09"
       }
 
-      // 0. Save data in pinecone
-      const docs = messages.map((doc) => new Document({
-        pageContent: doc.content,
-        metadata: {role: doc.role, timeStamp:doc.timestamp}
-      }))
-      
+      const textSplitter = new RecursiveCharacterTextSplitter({
+        chunkSize: 1000,
+        chunkOverlap: 200,
+      });
+      logger.info("saving in pinecone...");
+        const fullText = `[${message.role}] ${message.content}`;
+        const chunks = await textSplitter.splitText(fullText);
+        const documents = chunks.map((chunk, idx) => new Document({
+        pageContent: chunk,
+        metadata: {
+          conversationId:conversation.id,
+          userId,
+          type: 'conversation',
+          chunkIndex: idx,
+          totalChunks: chunks.length,
+          timestamp: new Date().toISOString(),
+          ...metadata
+        },
+      }));
+      await this.vectorStore.addDocuments(documents);
+      logger.info("saved in pinecone");
 
-      // 1. Upsert to Pinecone
-
-      async function checkPineconeConnection(pinecone:any) {
-        try {
-          const indexes = await pinecone.listIndexes();
-          console.log("✅ Available Indexes:", indexes);
-      
-          if (indexes.includes(process.env.PINECONE_INDEX_NAME!)) {
-            console.log("🎉 Pinecone is connected and index is ready.");
-          } else {
-            console.log("⚠️ Index not found. Check PINECONE_INDEX_NAME.");
-          }
-        } catch (error) {
-          console.error("❌ Error connecting to Pinecone:", error);
-        }
-      }
-      
-      await checkPineconeConnection(this.pinecone);
-
-      // // const vectorId = await this.vectorStore.addDocuments(docs);
-      // const indexes = await this.pinecone.listIndexes();
-      // console.log("============", indexes);
-      
       // 2. Create conversation record in database
       // const conversation = await this.prisma.conversation.create({
       //   data: {
@@ -117,33 +110,34 @@ export class MemoryService {
         id: conversation.id,
         userId,
         timestamp: new Date().toISOString(),
-        messages: messages,
+        message: message,
         metadata: {
           ...metadata,
-          messageCount: messages.length,
+          messageCount: 1,
           totalTokens: conversation.totalTokens,
         },
       };
 
       // 5. Build file path and save to NAS
-      const filename = `conv_${conversation.id}.json`;
-      const filePath = NASService.buildUserPath(userId, 'conversations', filename);
-      
-      await this.nas.writeFile(filePath, JSON.stringify(fileContent, null, 2));
 
-      // 6. Index the file (stores path in PostgreSQL and Pinecone)
-      await this.indexer.indexFile(filePath, userId, conversation.id);
+      // const filename = `conv_${conversation.id}.json`;
+      // const filePath = NASService.buildUserPath(userId, 'conversations', filename);
+      
+      // await this.nas.writeFile(filePath, JSON.stringify(fileContent, null, 2));
+
+      // 6. Index the file (stores path in PostgreSQL)
+      // await this.indexer.indexFile(filePath, userId, conversation.id);
 
       // 7. Check for memory triggers
-      await this.checkMemoryTriggers(conversation.id, messages, userId);
+      // await this.checkMemoryTriggers(conversation.id, messages, userId);
 
-      logger.info(`Successfully saved conversation ${conversation.id} to ${filePath}`);
+      // logger.info(`Successfully saved conversation ${conversation.id} to ${filePath}`);
 
       return {
         conversationId: conversation.id,
-        filePath,
+        filePath:"",
         indexed: true,
-        messageCount: messages.length,
+        messageCount: 1,
       };
     } catch (error) {
       logger.error('Failed to save conversation:', error);
@@ -186,6 +180,7 @@ export class MemoryService {
     );
 
     await this.nas.writeFile(summaryPath, summary);
+    
 
     // Index summary file
     await this.indexer.indexFile(summaryPath, conversation.userId, conversationId);

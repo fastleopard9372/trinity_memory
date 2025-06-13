@@ -28,14 +28,15 @@ export const createApp = async () => {
   logger.info('Initializing services...');
 
   try {
-    // const prisma = createPrismaClient();
-    // logger.info('Prisma client initialized');
-
-    // await prisma.$connect();
-    // logger.info('Database connected successfully');
 
     const supabase = createSupabaseClient();
     logger.info('Supabase client initialized');
+    
+    const prisma = createPrismaClient();
+    logger.info('Prisma client initialized');
+
+    await prisma.$connect();
+    logger.info('Database connected successfully');
 
     const nasConfig = getNASConfig();
     const nas = new NASService(nasConfig);
@@ -48,6 +49,7 @@ export const createApp = async () => {
     const vectorStore = await PineconeStore.fromExistingIndex(
       new OpenAIEmbeddings({
         openAIApiKey: process.env.OPENAI_API_KEY,
+        model: "text-embedding-ada-002"
       }),
       { pineconeIndex }
     );

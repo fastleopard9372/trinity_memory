@@ -1,10 +1,3 @@
-import { config } from "dotenv";
-import { Pinecone } from "@pinecone-database/pinecone";
-import { OpenAIEmbeddings } from "@langchain/openai";
-import { PineconeStore } from '@langchain/pinecone';
-import { Document } from "@langchain/core/documents";
-
-
 
 import { ChatOpenAI } from 'langchain/chat_models/openai';
 import { OpenAIEmbeddings } from '@langchain/openai';

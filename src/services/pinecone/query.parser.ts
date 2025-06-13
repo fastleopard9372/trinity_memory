@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 
 // Query intent schema
 const QueryIntentSchema = z.object({
+  action: z.enum(['normal', 'save', 'delete']).optional(),
   type: z.enum(['semantic', 'structured', 'hybrid']),
   query: z.string().optional(),
   filters: z.object({
@@ -18,7 +19,7 @@ const QueryIntentSchema = z.object({
     userId: z.string().optional(),
   }).optional(),
   aggregation: z.enum(['count', 'sum', 'average', 'group_by']).optional(),
-  groupBy: z.string().optional(),
+  groupBy: z.string().optional()
 });
 
 export type QueryIntent = z.infer<typeof QueryIntentSchema>;
@@ -35,14 +36,16 @@ export class QueryParser {
   /**
    * Parse natural language query into structured intent
    */
-  async parseQuery(userQuery: string): Promise<QueryIntent> {
+  async parseQuery(userQuery: string, type: 'ai'|'pattern'|'all' = 'ai'): Promise<QueryIntent> {
     logger.info(`Parsing query: "${userQuery}"`);
 
     // Try pattern matching first for common queries
-    const patternResult = this.parseWithPatterns(userQuery);
-    if (patternResult) {
-      return patternResult;
-    }
+    // if (type != 'ai') { 
+    //   const patternResult = this.parseWithPatterns(userQuery);
+    //   if (patternResult) {
+    //     return patternResult;
+    //   }
+    // }
 
     // Use AI for complex queries
     return this.parseWithAI(userQuery);
@@ -166,22 +169,31 @@ export class QueryParser {
   /**
    * Parse query using AI
    */
-  private async parseWithAI(userQuery: string): Promise<QueryIntent> {
+  private async parseWithAI(userQuery: string): Promise<any> {
     const systemPrompt = `You are a query parser for Trinity AI's memory system.
     Parse the user's natural language query into a structured format.
     
+    Determine the query action:
+     - normal: This is when there is no action
+     - store: when there is a similar phrase to save, store, remember or so on in storage or nas,
+     - delete: when there is a delete phrase to delete, clear, remove or so on from storage or nas
+
     Determine the query type:
     - semantic: For finding similar content, concepts, or topics
     - structured: For exact filters, dates, counts, specific file types
     - hybrid: For combining semantic search with filters
     
     Extract any filters mentioned:
-    - fileType: 'conversation', 'summary', 'proposal', etc.
-    - tags: Array of tag names
-    - dateRange: Start and end dates in ISO format
-    - conversationId: Specific conversation ID if mentioned
+    - [action]: 'normal'
+    - [type]:'semantic'
+    - [fileType]: 'conversation', 'summary', 'proposal', etc.
+    - [tags]: Array of tag names
+    - [dateRange]: Start and end dates in ISO format
+    - [conversationId]: Specific conversation ID if mentioned
+    - ...
     
     Examples:
+    - "Save in storage" → normal
     - "Find conversations about machine learning" → semantic
     - "Get all conversations from January 15th" → structured with date filter
     - "Show conversations about AI from last week" → hybrid with semantic + date
@@ -189,7 +201,7 @@ export class QueryParser {
 
     try {
       const completion = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: 'gpt-4',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userQuery },
@@ -202,14 +214,13 @@ export class QueryParser {
         function_call: { name: 'parse_query' },
         temperature: 0,
       });
-
       const result = completion.choices[0].message.function_call;
       if (!result) {
         throw new Error('No function call in response');
       }
 
       const parsed = JSON.parse(result.arguments);
-      return QueryIntentSchema.parse(parsed);
+      return result.arguments;
     } catch (error) {
       logger.error('AI query parsing failed:', error);
       
