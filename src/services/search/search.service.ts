@@ -504,4 +504,39 @@ export class SearchService {
       logger.error('Failed to log file access:', error);
     }
   }
+  /**
+   * Get file by direct path
+   */
+  async getFileByPath(filePath: string, userId: string): Promise<SearchResult> {
+    // Check permissions
+    const fileRecord = await this.prisma.nasFile.findFirst({
+      where: {
+        filePath,
+        userId,
+      },
+    });
+
+    if (!fileRecord) {
+      throw new Error('File not found or access denied');
+    }
+
+    // Read content from NAS
+    const content = await this.nas.readFile(filePath);
+
+    // Log access
+    await this.logFileAccess(fileRecord.id, userId, 'direct');
+
+    return {
+      id: fileRecord.id,
+      path: fileRecord.filePath,
+      fileName: fileRecord.fileName,
+      fileType: fileRecord.fileType || 'unknown',
+      content,
+      metadata: fileRecord.metadata || {},
+      tags: fileRecord.tags,
+      summary: fileRecord.summary || '',
+      createdAt: fileRecord.createdAt,
+      score: 1.0,
+    };
+  }
 }
