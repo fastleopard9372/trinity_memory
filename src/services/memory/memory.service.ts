@@ -66,7 +66,8 @@ export class MemoryService {
     try {
       // 1. Analyze conversation with LangChain
       const analysis = await this.langchain.analyzeConversation(messages);
-      
+      logger.info("messages", messages);  
+      logger.info("analysis", analysis);
       // 2. Create conversation record in database
       const conversation = await this.prisma.conversation.create({
         data: {

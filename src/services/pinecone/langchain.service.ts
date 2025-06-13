@@ -208,7 +208,7 @@ export class LangChainService {
         "topics": ["main", "topics", "discussed"],
         "sentiment": "positive/negative/neutral/mixed",
         "keyPoints": ["important", "points", "or", "decisions"],
-        "actionItems": ["any", "tasks", "or", "follow-ups", "mentioned"]
+        "actionItems": ["any", "tasks", "or", "follow-ups", "mentioned", "store", "read"]
       }}
     `);
 
