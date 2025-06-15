@@ -89,7 +89,7 @@ export class MemoryService {
         ...metadata,
         analysis: {
           action: analysis.action,
-          conversationId: analysis.conversationId,
+          conversationId: conversationId,
           dateRange: analysis.dateRange,
           fileType: analysis.fileType,
           summary: analysis.summary,
@@ -102,7 +102,6 @@ export class MemoryService {
       if (existingConversation) {
         // Update existing conversation
         const newMessageCount = existingConversation.messages.length + messages.length;
-        // const newMessages = [...existingConversation.messages, ...messages]
         conversation = await this.prisma.conversation.update({
           where: { id: conversationId },
           data: {

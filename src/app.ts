@@ -55,7 +55,7 @@ export const createApp = async () => {
     );
     logger.info('Vector store initialized');
 
-    // app.locals.prisma = prisma;
+    app.locals.prisma = prisma;
     app.locals.supabase = supabase;
     app.locals.nas = nas;
     app.locals.pinecone = pinecone;
@@ -64,7 +64,7 @@ export const createApp = async () => {
     app.use(helmet());
     app.use(cors());
     app.use(compression());
-    app.use(express.json({ limit: '10mb' }));
+    app.use(express.json({ limit: '50mb' }));
     app.use(express.urlencoded({ extended: true }));
 
     app.use((req, res, next) => {

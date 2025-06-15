@@ -46,7 +46,6 @@ export class MemoryController {
           error: 'Message is required',
         });
       }
-
       const result = await this.memoryService.saveConversation(
         messages,
         userId,
@@ -233,31 +232,10 @@ export class MemoryController {
       // }
 
       // Execute query with pagination
+      console.log(this.prisma.conversation)
       const [conversations, total] = await Promise.all([
         this.prisma.conversation.findMany({
-          where,
-          // include: {
-          //   tags: {
-          //     include: {
-          //       tag: true,
-          //     },
-          //   },
-          //   _count: {
-          //     select: {
-          //       messages: true,
-          //     },
-          //   },
-          //   nasFiles: {
-          //     select: {
-          //       id: true,
-          //       filePath: true,
-          //       fileSize: true,
-          //     },
-          //   },
-          // },
-          orderBy: { [sortBy as string]: order },
-          take: parseInt(limit as string),
-          skip: parseInt(offset as string),
+          where
         }),
         this.prisma.conversation.count({ where }),
       ]);

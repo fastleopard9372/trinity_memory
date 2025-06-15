@@ -10,7 +10,7 @@ export const messageSchema = z.object({
 
 export const saveConversationSchema = z.object({
   messages: z.array(messageSchema).min(1),
-  ConversationId:z.string().optional(),
+  conversationId:z.string().optional(),
   metadata: z.record(z.any()).optional(),
 });
 
