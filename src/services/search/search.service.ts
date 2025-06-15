@@ -5,6 +5,7 @@ import { NASService } from '../nas/nas.service';
 import { QueryParser } from '../pinecone/query.parser';
 import { LangChainService } from '../pinecone/langchain.service';
 import { logger } from '../../utils/logger';
+import { fi } from 'zod/dist/types/v4/locales';
 
 export interface SearchResult {
   id: string;
@@ -26,8 +27,8 @@ export interface SearchOptions {
   fileTypes?: string[];
   tags?: string[];
   dateRange?: {
-    start: Date;
-    end: Date;
+    start: string;
+    end: string;
   };
 }
 
@@ -47,7 +48,7 @@ export class SearchService {
     this.vectorStore = vectorStore;
     this.nas = nas;
     this.queryParser = new QueryParser();
-    this.langchain = new LangChainService();
+    this.langchain = new LangChainService(vectorStore);
   }
 
   /**
@@ -86,11 +87,12 @@ export class SearchService {
         results = await this.hybridSearchWithLangChain(query, intent.filters, userId, options);
         break;
       default:
-        throw new Error(`Unknown search type: ${intent.type}`);
+        results = await this.semanticSearchWithLangChain(query, userId, options);
+        // throw new Error(`Unknown search type: ${intent.type}`);
     }
 
     // Log search query for analytics
-    await this.logSearchQuery(query, intent.type, results.map(r => r.path), userId);
+    // await this.logSearchQuery(query, intent.type, results.map(r => r.path), userId);
 
     return results;
   }
@@ -142,7 +144,7 @@ export class SearchService {
         if (!fileRecord) continue;
 
         // Read content from NAS
-        const content = await this.nas.readFile(filePath);
+        const content = ""//await this.nas.readFile(filePath);
 
         // Find the most relevant section
         const bestMatch = docs.reduce((best, current) => 
@@ -174,7 +176,7 @@ export class SearchService {
         });
 
         // Log file access
-        await this.logFileAccess(fileRecord.id, userId, 'search');
+        // await this.logFileAccess(fileRecord.id, userId, 'search');
       } catch (error) {
         logger.error(`Failed to process file ${filePath}:`, error);
       }
@@ -422,7 +424,7 @@ export class SearchService {
 
         try {
           // Read content from NAS
-          const content = await this.nas.readFile(filePath);
+          const content = ""//await this.nas.readFile(filePath);
 
           // Log file access
           await this.logFileAccess(fileRecord.id, userId, 'search');

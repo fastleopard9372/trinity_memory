@@ -25,7 +25,7 @@ export const createPrismaClient = () => {
   });
 
   prisma.$on('query', (e) => {
-    logger.debug(`Query: ${e.query} - Params: ${e.params} - Duration: ${e.duration}ms`);
+    // logger.debug(`Query: ${e.query} - Params: ${e.params} - Duration: ${e.duration}ms`);
   });
 
   prisma.$on('error', (e) => {

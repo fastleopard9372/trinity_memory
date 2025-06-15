@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Conversation, PrismaClient } from '@prisma/client';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Document } from "@langchain/core/documents";
 import { Pinecone as PineconeClient } from '@pinecone-database/pinecone';
@@ -6,6 +6,7 @@ import { PineconeStore } from '@langchain/pinecone';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { NASService } from '../nas/nas.service';
 import { LangChainService } from '../pinecone/langchain.service';
+import { SearchOptions, SearchService } from '../search/search.service';
 import { FileIndexer } from '../indexer/file.indexer';
 import { QueryParser, QueryIntent } from '../pinecone/query.parser';
 import { logger } from '../../utils/logger';
@@ -14,13 +15,16 @@ import { log, timeStamp } from 'console';
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
+  conversation_id?:string;
+  filePath?:string;
   timestamp?: Date;
 }
 
 export interface SaveConversationResult {
-  conversationId: string;
+  conversation: Conversation,
   filePath: string;
   indexed: boolean;
+  message: any;
   messageCount: number;
 }
 
@@ -32,6 +36,7 @@ export class MemoryService {
   private indexer: FileIndexer;
   private vectorStore: PineconeStore;
   private langchain: LangChainService;
+  private searchService: SearchService;
 
   constructor(
     prisma: PrismaClient,
@@ -46,7 +51,8 @@ export class MemoryService {
     this.vectorStore = vectorStore;
     this.nas = nas;
     this.indexer = new FileIndexer(prisma, nas, pinecone);
-    this.langchain = new LangChainService();
+    this.langchain = new LangChainService(this.vectorStore);
+    this.searchService = new SearchService(prisma, vectorStore, nas);
   }
   async initialize() {
     // Initialize LangChain with Pinecone
@@ -59,81 +65,215 @@ export class MemoryService {
   async saveConversation(
     messages: Message[],
     userId: string,
+    conversationId?: string,
     metadata?: Record<string, any>
   ): Promise<SaveConversationResult> {
     logger.info(`Saving conversation for user ${userId} with ${messages.length} messages`);
-
+  
     try {
       // 1. Analyze conversation with LangChain
       const analysis = await this.langchain.analyzeConversation(messages);
-      logger.info("messages", messages);  
+      logger.info("messages", messages);
       logger.info("analysis", analysis);
+      
       // 2. Create conversation record in database
-      const conversation = await this.prisma.conversation.create({
-        data: {
-          userId,
-          messageCount: messages.length,
-          totalTokens: this.estimateTokens(messages),
-          status: 'active',
+      let existingConversation = null;
+      if (conversationId) {
+        existingConversation = await this.prisma.conversation.findUnique({
+          where: { id: conversationId },
+          include:{ messages: true}
+        });
+      }
+  
+      const conversationMetadata = {
+        ...metadata,
+        analysis: {
+          action: analysis.action,
+          conversationId: analysis.conversationId,
+          dateRange: analysis.dateRange,
+          fileType: analysis.fileType,
           summary: analysis.summary,
-          metadata: {
-            ...metadata,
-            analysis: {
-              topics: analysis.topics,
-              sentiment: analysis.sentiment,
-              keyPoints: analysis.keyPoints,
-              actionItems: analysis.actionItems,
+          tags: analysis.tags,
+          type: analysis.type
+        },
+      };
+
+      let conversation;
+      if (existingConversation) {
+        // Update existing conversation
+        const newMessageCount = existingConversation.messages.length + messages.length;
+        // const newMessages = [...existingConversation.messages, ...messages]
+        conversation = await this.prisma.conversation.update({
+          where: { id: conversationId },
+          data: {
+            messageCount: newMessageCount,
+            totalTokens: this.estimateTokens(messages),
+            metadata: {
+              ...((typeof existingConversation.metadata === 'object' &&
+                existingConversation.metadata !== null)
+                ? (existingConversation.metadata as Record<string, any>)
+                : {}),
+              ...conversationMetadata
             },
           },
-        },
-      });
-
+        });
+      } else {
+        // Create new conversation
+        conversation = await this.prisma.conversation.create({
+          data: {
+            userId,
+            messageCount: messages.length,
+            totalTokens: this.estimateTokens(messages),
+            status: 'active',
+            summary: analysis.summary,
+            metadata: {
+              ...conversationMetadata
+            },
+          },
+        });
+      }
+  
+      if (!conversation) {
+        throw new Error("Failed to create or update conversation");     
+      }
       // 3. Extract entities for better searchability
-      const conversationText = messages.map(m => m.content).join(' ');
+      let conversationText = messages.map(m => m.content).join(' ');
       const entities = await this.langchain.extractEntities(conversationText);
       
       // 4. Auto-tag based on topics and entities
-      const autoTags = [...analysis.topics, ...entities.topics].filter(
+      const autoTags = [...analysis.tags, ...entities.topics].filter(
         (tag, index, self) => self.indexOf(tag) === index
       );
       
       if (autoTags.length > 0) {
         await this.tagConversationWithTopics(conversation.id, autoTags, userId);
       }
-
+  
       // 5. Save messages metadata to database
-      const messageRecords = await this.prisma.message.createMany({
+
+      await this.prisma.message.createMany({
         data: messages.map((msg, index) => ({
           conversationId: conversation.id,
           role: msg.role,
+          content: msg.content,
           tokenCount: this.estimateTokens([msg]),
           timestamp: msg.timestamp || new Date(),
           vectorId: `vec_${conversation.id}_${index}`,
         })),
       });
+  
+      // 8. Build file path and save to NAS
+      let filePath = "", filename = "";
+      let result = '';
+      if(analysis.action =="store"){
+        filename = `conv_${conversation.id}_${new Date().toISOString()}.json`;
+        filePath = NASService.buildUserPath(userId, 'conversations', filename);
 
-      // 6. Prepare conversation file content
-      const fileContent = {
-        id: conversation.id,
-        userId,
-        timestamp: new Date().toISOString(),
-        messages: messages,
-        metadata: {
-          ...metadata,
-          messageCount: messages.length,
-          totalTokens: conversation.totalTokens,
-          analysis,
-          entities,
-        },
-      };
+        const unSavedMgs = await this.prisma.message.findMany({
+          where: {
+            conversationId: conversation.id,
+            filePath: "",
+          },
+          orderBy: { timestamp: 'asc' },
+          select: {
+            id: true,
+            conversationId: true,
+            role: true,
+            tokenCount: true,
+            content: true,
+            vectorId: true,
+            metadata: true,
+            timestamp: true,
+          },
+        });
+        const fileContent = {
+          id: conversation.id,
+          userId,
+          timestamp: new Date().toISOString(),
+          messages: unSavedMgs,
+          metadata: {
+            ...metadata,
+            messageCount: messages.length,
+            totalTokens: conversation.totalTokens,
+            analysis,
+            entities,
+          },
+        };
 
-      // 7. Build file path and save to NAS
-      const filename = `conv_${conversation.id}.json`;
-      const filePath = NASService.buildUserPath(userId, 'conversations', filename);
-      
-      await this.nas.writeFile(filePath, JSON.stringify(fileContent, null, 2));
+        await this.nas.writeFile(filePath, JSON.stringify(fileContent, null, 2));
+        await this.prisma.message.updateMany({
+          where: {
+            id: {
+              in: unSavedMgs.map(m => m.id),
+            },
+          },
+          data: {
+            filePath,
+          },
+        });
+        
+        const messageResult = await this.prisma.message.findMany({
+          where: { id: conversationId }
+        })
+        await this.prisma.nasFile.create({
+          data: {
+            userId,
+            filePath,
+            fileName: filename,
+            folderPath: NASService.buildUserPath(userId, 'conversations', ''),
+            fileType: 'conversation',
+            fileSize: BigInt(JSON.stringify(fileContent).length),
+            checksum: await this.nas.getFileChecksum(filePath),
+            title: `Conversation on ${new Date().toLocaleDateString()}`,
+            summary: analysis.summary,
+            tags: autoTags,
+            metadata: JSON.parse(JSON.stringify({ analysis, entities })),
+            conversationId: conversation.id,
+            vectorIds: messageResult.map((_, i) => `vec_${conversation.id}_${i}`),
+            indexedAt: new Date(),
+          },
+        });
+        result = await this.langchain.generateFollowUpQuestions(
+          conversationText
+        );
+        logger.info(`Successfully saved conversation ${conversation.id} to ${filePath}`);
+        result = await this.langchain.savePrompt()
+      }else if(analysis.action =="search"){
+        const options : SearchOptions= {
+          limit: 10,
+          offset: 0,
+          fileTypes: analysis.fileType ? [analysis.fileType] : undefined, 
+          tags: analysis.tags,
+          dateRange: analysis.dateRange?.length && analysis.dateRange[1]
+            ? {
+                start: new Date(analysis.dateRange[0]).toISOString(), 
+                end: new Date(analysis.dateRange[1]).toISOString(), 
+              }
+            : undefined,
+        };
+        const p_result = await this.searchService.search(conversationText, userId, options);
+        result = await this.langchain.searchPrompt(conversationText, p_result)
 
-      // 8. Create LangChain documents from messages
+      } else {
+        const options : SearchOptions= {
+          limit:40,
+          offset: 0,
+        };
+        const p_result = await this.searchService.search(conversationText, userId, options)
+        result = await this.langchain.generalPrompt(conversationText, p_result)
+      }
+
+      const AIMessage = await this.prisma.message.create({
+        data: {
+          conversationId : conversation.id,
+          role : 'assistant',
+          content: result,
+          tokenCount: 1,
+          timestamp: new Date(),
+          vectorId: `vec_${conversation.id}_${new Date().toISOString()}`,
+        }
+      });
+
       const documents = await this.createConversationDocuments(
         messages,
         conversation.id,
@@ -141,52 +281,13 @@ export class MemoryService {
         filePath
       );
 
-      // 9. Add documents to Pinecone via LangChain
+      //Add documents to Pinecone via LangChain
       await this.langchain.addDocumentsToPinecone(documents);
 
-      // 10. Store file path reference in database
-      await this.prisma.nasFile.create({
-        data: {
-          userId,
-          filePath,
-          fileName: filename,
-          folderPath: NASService.buildUserPath(userId, 'conversations', ''),
-          fileType: 'conversation',
-          fileSize: BigInt(JSON.stringify(fileContent).length),
-          checksum: await this.nas.getFileChecksum(filePath),
-          title: `Conversation on ${new Date().toLocaleDateString()}`,
-          summary: analysis.summary,
-          tags: autoTags,
-          metadata: JSON.parse(JSON.stringify({ analysis, entities })),
-          conversationId: conversation.id,
-          vectorIds: documents.map((_, i) => `vec_${conversation.id}_${i}`),
-          indexedAt: new Date(),
-        },
-      });
-
-      // 11. Generate follow-up questions for future reference
-      const followUpQuestions = await this.langchain.generateFollowUpQuestions(
-        conversationText,
-        3
-      );
-      
-      if (followUpQuestions.length > 0) {
-        await this.prisma.conversation.update({
-          where: { id: conversation.id },
-          data: {
-            metadata: {
-              ...conversation.metadata as any,
-              followUpQuestions,
-            },
-          },
-        });
-      }
-
-      logger.info(`Successfully saved conversation ${conversation.id} to ${filePath}`);
-
       return {
-        conversationId: conversation.id,
         filePath,
+        message: AIMessage,
+        conversation: conversation,
         indexed: true,
         messageCount: messages.length,
       };
@@ -255,7 +356,7 @@ export class MemoryService {
     let currentIndices: number[] = [];
 
     for (let i = 0; i < messages.length; i++) {
-      const messageText = `${messages[i].role}: ${messages[i].content}`;
+      const messageText =  messages[i].content;
       
       if (currentChunk.length + messageText.length > 1000) {
         if (currentChunk) {
@@ -278,6 +379,7 @@ export class MemoryService {
       pageContent: chunk.text,
       metadata: {
         conversationId,
+        role: messages[0].role,
         userId,
         filePath,
         chunkIndex: index,

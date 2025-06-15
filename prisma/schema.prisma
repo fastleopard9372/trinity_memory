@@ -85,6 +85,8 @@ model Message {
   vectorId       String?
   metadata       Json?
   timestamp      DateTime     @default(now())
+  content        String       @default("")
+  filePath       String       @default("")
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])

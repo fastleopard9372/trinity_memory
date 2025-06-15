@@ -29,8 +29,8 @@ export class SearchController {
         fileTypes: req.query.fileTypes as string[],
         tags: req.query.tags as string[],
         dateRange: req.query.startDate && req.query.endDate ? {
-          start: new Date(req.query.startDate as string),
-          end: new Date(req.query.endDate as string),
+          start: new Date(req.query.startDate as string).toISOString(),
+          end: new Date(req.query.endDate as string).toISOString(),
         } : undefined,
       };
 

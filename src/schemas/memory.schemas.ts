@@ -1,13 +1,16 @@
+import { ConversationChain } from 'langchain/chains';
 import { z } from 'zod';
 
 export const messageSchema = z.object({
   role: z.enum(['user', 'assistant']),
   content: z.string().min(1),
   timestamp: z.string().datetime().optional(),
+  ConversationId:z.string().optional(),
 });
 
 export const saveConversationSchema = z.object({
   messages: z.array(messageSchema).min(1),
+  ConversationId:z.string().optional(),
   metadata: z.record(z.any()).optional(),
 });
 

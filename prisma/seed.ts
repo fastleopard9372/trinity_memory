@@ -6,7 +6,7 @@ async function main() {
   console.log('🌱 Seeding database...');
 
   // Create test user
-  const testUserId = 'test-user-id';
+  const testUserId = 'test_user';
   const testUser = await prisma.profile.upsert({
     where: { userId: testUserId },
     update: {},

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { MemoryController } from '../controller/memory.controller';
 import { validateRequest } from '../middleware/validation.middle';
-import { saveConversationSchema, createRuleSchema } from '../schemas/memory.schemas';
+import { saveConversationSchema, createRuleSchema, messageSchema } from '../schemas/memory.schemas';
 
 const router = Router();
 
@@ -16,6 +16,11 @@ router.post(
   '/conversations',
   validateRequest(saveConversationSchema),
   (req:any, res, next) => req.memoryController.saveConversation(req, res, next)
+);
+router.post(
+  '/message',
+  validateRequest(messageSchema),
+  (req:any, res, next) => req.memoryController.saveMessage(req, res, next)
 );
 
 router.get(
