@@ -39,24 +39,21 @@ export class MemoryController {
    */
   saveConversation = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { message, metadata } = req.body;
+      const { messages, metadata } = req.body;
       const userId = req.user.id; // From auth middleware
 
-      if (!message) {
+      if (!messages) {
         return res.status(400).json({
           error: 'Message is required',
         });
       }
 
       const result = await this.memoryService.saveConversation(
-        message,
+        messages,
         userId,
         metadata
       );
       
-      const fullText = `[${message.role}] ${message.content}`;
-      const searchResult = await this.searchService.search(fullText, userId)
-      logger.info(searchResult);
       res.json({
         success: true,
         data: { result },
