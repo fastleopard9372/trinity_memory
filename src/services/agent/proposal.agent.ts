@@ -69,7 +69,7 @@ export class ProposalAgent {
       `proposal_${proposal.id}.md`
     );
 
-    await this.nas.writeFile(proposalPath, proposalContent);
+    // await this.nas.writeFile(proposalPath, proposalContent);
 
     logger.info(`Proposal ${proposal.id} generated and saved to ${proposalPath}`);
 

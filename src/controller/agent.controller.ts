@@ -96,7 +96,6 @@ export class AgentController {
           metadata: metadata || {},
         },
       });
-
       // Save job to NAS
       const jobPath = NASService.buildUserPath(
         userId,
