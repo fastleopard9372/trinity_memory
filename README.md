@@ -1,5 +1,3 @@
-// README.md
-
 # Trinity AI
 
 A self-managing AI agent with dual memory system combining fast vector search and persistent NAS storage.
@@ -22,6 +20,64 @@ A self-managing AI agent with dual memory system combining fast vector search an
 - **AI**: OpenAI, LangChain
 - **Auth**: Supabase Auth
 - **Automation**: n8n workflows
+
+## Project Scope for Phase 1 – Final Spec (You Can Send This to Volo)
+
+### Project: Trinity AI – Phase 1 (Memory + Message Handling MVP)
+
+**Goal**: Build a self-contained memory system and basic input/output agent that can:
+
+- Receive natural language messages
+- Parse and structure memory from them
+- Store memory entries
+- Query past memories
+- Respond with summaries
+
+### Modules
+
+1. **Input Listener** (can be CLI or simple HTTP endpoint)
+    - Accepts raw text input
+    - Triggers memory parser
+
+2. **Memory Parser**
+    - Extract from text:
+      - date (from text or default to today)
+      - people (names)
+      - topics (noun phrases)
+      - actions (sentences with verbs + "I"/"we")
+      - tags (nouns + named entities)
+    - Output: structured JSON
+
+3. **Memory Saver**
+    - Save structured JSON to local filesystem (or NAS path)
+    - Format: .json file per memory or append to a .log.json file
+    - Folder: /memory/logs/yyyy-mm/ etc.
+
+4. **Query Handler**
+    - Accept query like: “What did I say about health last week?”
+    - Search memory entries (by keyword, tag, or date range)
+    - Return matching structured entries or summarized output
+
+5. **Summarizer Agent**
+    - For longer entries: auto-generate a summary and store it alongside raw data
+    - Use basic prompt → send to OpenAI if needed (optional for now)
+
+### Testing
+- Include 2–3 sample memory entries and 1 example query
+- Make sure query handler can retrieve them and respond cleanly
+- Keep all configs modular and paths readable
+
+### Notes
+- No more code from me or ChatGPT.
+- You fully own all code — clean, professional, modular.
+- I will not change these specs once you begin.
+- Once Phase 1 is done, we’ll have a clean platform to test and build on.
+
+You can paste that whole message into ClickUp or send it to him directly with a note like:
+
+> “Here’s the final scope for Phase 1 — no more changes. Please ignore the GPT code from before and work from this document only. Thanks for your patience.”
+
+---
 
 ## Quick Start
 
@@ -91,27 +147,3 @@ A self-managing AI agent with dual memory system combining fast vector search an
 - `POST /api/agent/proposals` - Generate proposal
 
 ## Architecture
-
-```
-User Query → Express API → Auth Check → Query Parser
-                ↓
-         [Semantic/Structured]
-                ↓
-    Pinecone/PostgreSQL (file paths)
-                ↓
-         NAS File Reader
-                ↓
-         Return Content
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
