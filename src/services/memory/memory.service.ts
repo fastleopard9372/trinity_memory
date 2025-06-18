@@ -8,6 +8,7 @@ import { NASService } from '../nas/nas.service';
 import { LangChainService } from '../pinecone/langchain.service';
 import { SearchOptions, SearchService } from '../search/search.service';
 import { FileIndexer } from '../indexer/file.indexer';
+import { MemoryParser } from "../pinecone/memory.parser";
 import { QueryParser, QueryIntent } from '../pinecone/query.parser';
 import { logger } from '../../utils/logger';
 import { log, timeStamp } from 'console';
@@ -37,6 +38,7 @@ export class MemoryService {
   private vectorStore: PineconeStore;
   private langchain: LangChainService;
   private searchService: SearchService;
+  private memoryParser: MemoryParser;
 
   constructor(
     prisma: PrismaClient,
@@ -50,6 +52,7 @@ export class MemoryService {
     this.pinecone = pinecone;
     this.vectorStore = vectorStore;
     this.nas = nas;
+    this.memoryParser = new MemoryParser(prisma, supabase, nas, pinecone, vectorStore);
     this.indexer = new FileIndexer(prisma, nas, pinecone);
     this.langchain = new LangChainService(this.vectorStore);
     this.searchService = new SearchService(prisma, vectorStore, nas);
@@ -72,7 +75,17 @@ export class MemoryService {
   
     try {
       // 1. Analyze conversation with LangChain
+      /*
+        4. Query Handler
+        Accept query like: “What did I say about health last week?”
+        Search memory entries (by keyword, tag, or date range)
+        Return matching structured entries or summarized output
+      */
       const analysis = await this.langchain.analyzeConversation(messages);
+
+      if (analysis.action == "storeandSave") {
+        const anylysiz = await this.memoryParser.analyzeText(messages,userId,conversationId);
+      }
       logger.info("messages", messages);
       logger.info("analysis", analysis);
       
@@ -356,7 +369,11 @@ export class MemoryService {
 
     for (let i = 0; i < messages.length; i++) {
       const messageText =  messages[i].content;
-      
+      /*
+      5. Summarizer Agent
+      For longer entries: auto-generate a summary and store it alongside raw data
+      Use basic prompt → send to OpenAI if needed (optional for now)
+      */
       if (currentChunk.length + messageText.length > 1000) {
         if (currentChunk) {
           chunks.push({ text: currentChunk, messageIndices: currentIndices });

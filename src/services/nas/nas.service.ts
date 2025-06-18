@@ -267,7 +267,7 @@ export class NASService {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     
-    return `/trinity/users/${userId}/${type}/${year}/${month}/${filename}`;
+    return `/trinity/memory/${userId}/${type}/${year}-${month}/${filename}`;
   }
 }
 

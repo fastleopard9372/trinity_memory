@@ -16,6 +16,9 @@ export interface ConversationAnalysis {
   fileType?: string;
   tags: string[];
   dateRange?: string[];
+  date?: string;
+  people?: string[];
+  topics?: string[];
   conversationId?: string;
 }
 
@@ -37,6 +40,11 @@ export class LangChainService {
       openAIApiKey: process.env.OPENAI_API_KEY,
     });
 
+    /*
+      5. Summarizer Agent
+      For longer entries: auto-generate a summary and store it alongside raw data
+      Use basic prompt → send to OpenAI if needed (optional for now)
+    */
     this.textSplitter = new RecursiveCharacterTextSplitter({
       chunkSize: 1000,
       chunkOverlap: 200,
@@ -200,6 +208,15 @@ export class LangChainService {
    * Analyze conversation for insights
    */
   async analyzeConversation(messages: any[]): Promise<ConversationAnalysis> {
+    /*
+        2. Memory Parser
+        Extract from text:
+        date (from text or default to today)
+        people (names)
+        topics (noun phrases)
+        actions (sentences with verbs + "I"/"we")
+        tags (nouns + named entities)
+      */
     const analysisPrompt = PromptTemplate.fromTemplate(`
       Analyze the following conversation and provide a structured analysis.
       Conversation:
@@ -266,6 +283,79 @@ export class LangChainService {
       };
     }
   }
+
+  /**
+   * Analyze conversation for insights
+    */
+  async analyzeText(messages: any[]): Promise<ConversationAnalysis> {
+    /*
+        2. Memory Parser
+        Extract from text:
+        date (from text or default to today)
+        people (names)
+        topics (noun phrases)
+        actions (sentences with verbs + "I"/"we")
+        tags (nouns + named entities)
+      */
+    const analysisPrompt = PromptTemplate.fromTemplate(`
+      Analyze the following text and extract the following data:
+
+        Date: Identify any date mentioned in the text or use today's date if no date is mentioned.
+
+        People: Extract any names of people mentioned.
+
+        Topics: Identify key noun phrases or subjects being discussed in the text.
+
+        Actions: Extract sentences containing verbs that involve "I" or "we," indicating what actions are being performed.
+
+        Tags: Identify important nouns and named entities from the text (e.g., company names, locations, technologies, etc.).
+
+        Text: {conversation}
+        
+        Output to the structured JSON
+
+        Provide the extracted information in the following format:
+
+        {
+        "date": "YYYY-MM-DD",
+        "people": ["Name1", "Name2", ...],
+        "topics": ["Topic1", "Topic2", ...],
+        "actions": ["Action1", "Action2", ...],
+        "tags": ["Tag1", "Tag2", ...]
+        }"
+
+
+    `);
+
+    const chain = new LLMChain({
+      llm: this.llm,
+      prompt: analysisPrompt,
+    });
+
+    try {
+      const conversationText = messages
+        .map(m => `${m.role}: ${m.content}`)
+        .join('\n');
+
+      const result = await chain.call({
+        conversation: conversationText,
+      });
+      logger.info("analysis:",result);
+      const analysis = JSON.parse(result.text);
+      return analysis;
+    } catch (error) {
+      logger.error('Failed to analyze conversation:', error);
+      
+      // Return default analysis on error
+      return {
+        summary: 'Unable to generate summary',
+        action:'none',
+        type: 'none',
+        tags:['none']
+      };
+    }
+  }
+
 
   /**
    * Generate smart summary with key insights

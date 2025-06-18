@@ -46,6 +46,7 @@ export class MemoryController {
           error: 'Message is required',
         });
       }
+      
       const result = await this.memoryService.saveConversation(
         messages,
         userId,

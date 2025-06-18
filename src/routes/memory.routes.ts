@@ -11,7 +11,7 @@ router.use((req, res, next) => {
   req.memoryController = new MemoryController(prisma, supabase, nas, pinecone, vectorStore);
   next();
 });
-
+//---------------Receive natural language messages----------------//
 router.post(
   '/conversations',
   validateRequest(saveConversationSchema),
